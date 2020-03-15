@@ -48,5 +48,5 @@ def test():
     logger.info(f'测试完毕')
 
 if __name__ == "__main__":
-    start()
-    # test()
+    # start()
+    test()
