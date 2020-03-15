@@ -12,6 +12,8 @@ import re
 import time
 import requests
 import string
+import json
+from pathlib import Path
 import subprocess
 from datetime import datetime
 from urllib.parse import quote
@@ -45,7 +47,7 @@ class Automation():
         }
         logger.info('打开 appium 服务,正在配置...')
         self.driver = webdriver.Remote('http://localhost:4723/wd/hub', self.desired_caps)
-        self.wait = WebDriverWait(self.driver, 15)
+        self.wait = WebDriverWait(self.driver, 15) # 定位元素超时设为15秒
         self.size = self.driver.get_window_size()
 
     def connect(self):
@@ -651,9 +653,9 @@ class App(Automation):
                 "notes": ""
             })
 
-    def _dispath(self):
-        for i in range(self.count_of_each_group):
-            logger.debug(f'每日答题 第 {4-i} 题')
+    def _dispath(self, count_of_each_group):
+        for i in range(count_of_each_group):
+            logger.debug(f'每日答题 第 {i+1} 题')
             try:
                 category = self.driver.find_element_by_xpath(rules["daily_category"]).get_attribute("name")
             except NoSuchElementException as e:
@@ -674,7 +676,7 @@ class App(Automation):
         while num:
             num -= 1
             logger.info(f'每日答题 第 {num}# 组')
-            self._dispath()
+            self._dispath(self.count_of_each_group)
             if not self.daily_force:
                 score = self.wait.until(EC.presence_of_element_located((By.XPATH, rules["daily_score"]))).get_attribute("name")
                 # score = self.find_element(rules["daily_score"]).get_attribute("name")
@@ -727,15 +729,16 @@ class App(Automation):
             self.read_count = cfg.getint("prefers", "article_count")
             self.read_delay = 30
         except:
-            g, t = self.score["阅读文章"]
-            if t == g:
+            cg, ct = self.score["阅读文章"]
+            tg, tt = self.score["文章学习时长"]
+            if ct == cg and tg ==  tt: # 同时完成 <数量> 和 <时长>
                 self.read_count = 0
-                self.read_delay = random.randint(45, 60)
+                # self.read_delay = random.randint(45, 60)
             else:
                 self.read_count = random.randint(
                         cfg.getint('prefers', 'article_count_min'), 
                         cfg.getint('prefers', 'article_count_max'))
-                self.read_delay = self.read_time // self.read_count + 1
+                self.read_delay = self.read_time // self.read_count + 3
 
     def _star_once(self):
         if self.back_or_not("收藏"):
@@ -951,92 +954,139 @@ class App(Automation):
     def _weekly_init(self):
         self.workdays = cfg.get("prefers", "workdays")
 
-    def _weekly(self):
+    def _weekly(self, avarice=False):
+        count_of_weekly_each_group = 5
         self.safe_click(rules["weekly_entry"])
-        weekly_current = self.wait.until(EC.presence_of_element_located(
-            (By.XPATH, rules['weekly_current'])
-        ))
-        if "未作答" == weekly_current.get_attribute("name"):
+
+        weekly_current = self.weekly_travel()
+
+        if weekly_current:
             weekly_current.click()
             time.sleep(5)
-            for i in range(self.count_of_each_group):
-                logger.debug(f'每周答题 第 {4-i} 题')
-                try:
-                    category = self.driver.find_element_by_xpath(rules["daily_category"]).get_attribute("name")
-                except NoSuchElementException as e:
-                    logger.error(f'无法获取题目类型')
-                    raise e
-                if "填空题" == category:
-                    contents = self.wait.until(EC.presence_of_all_elements_located(
-                        (By.XPATH, rules["daily_blank_content"])
-                    ))
-                    content = " ".join([x.get_attribute("name") for x in contents])
-                    options = []
-                    blank_edits = self.wait.until(EC.presence_of_all_elements_located(
-                        (By.XPATH, rules["daily_blank_edits"])
-                    ))
-                elif "单选题" == category:
-                    content = self.wait.until(EC.presence_of_element_located(
-                        (By.XPATH, rules["daily_content"])
-                    )).get_attribute("name")
-                    option_elements = self.wait.until(EC.presence_of_all_elements_located(
-                        (By.XPATH, rules["daily_options"])
-                    ))
-                    options = [x.get_attribute("name") for x in option_elements]
-                elif "多选题" == category:
-                    content = self.wait.until(EC.presence_of_element_located(
-                        (By.XPATH, rules["daily_content"])
-                    )).get_attribute("name")
-                    option_elements = self.wait.until(EC.presence_of_all_elements_located(
-                        (By.XPATH, rules["daily_options"])
-                    ))
-                    options = [x.get_attribute("name") for x in option_elements]
-                else:
-                    logger.error(f"未知的题目类型: {category}")
-                    raise('未知的题目类型')
-                bank = self.query.get({
-                    "category": category,
-                    "content": content,
-                    "options": options
-                })
-                if bank and bank["answer"]:
+            # 直接重用每日答题模块,可能会带来丢分的后果,如果介意,请将配置
+            if not avarice:  # 激进策略,提高效率,伴随风险
+                self._dispath(count_of_weekly_each_group)
+
+            else:   # 保守策略,损失效率,保证分数
+                for i in range(count_of_weekly_each_group):
+                    logger.debug(f'每周答题 第 {i} 题')
+                    try:
+                        category = self.driver.find_element_by_xpath(rules["daily_category"]).get_attribute("name")
+                    except NoSuchElementException as e:
+                        logger.error(f'无法获取题目类型')
+                        raise e
                     if "填空题" == category:
-                        answer = bank["answer"].split(" ")
-                        logger.debug(f'提交答案 {answer}')
-                        for k,v in zip(blank_edits, answer):
-                            k.send_keys(v)
-                            time.sleep(1)
-                        
+                        contents = self.wait.until(EC.presence_of_all_elements_located(
+                            (By.XPATH, rules["daily_blank_content"])
+                        ))
+                        content = " ".join([x.get_attribute("name") for x in contents])
+                        options = []
+                        blank_edits = self.wait.until(EC.presence_of_all_elements_located(
+                            (By.XPATH, rules["daily_blank_edits"])
+                        ))
                     elif "单选题" == category:
-                        answer = bank["answer"]
-                        choose_index = ord(answer) - 65
-                        logger.info(f"提交答案 {answer}")
-                        option_elements[choose_index].click()
-                        
+                        content = self.wait.until(EC.presence_of_element_located(
+                            (By.XPATH, rules["daily_content"])
+                        )).get_attribute("name")
+                        option_elements = self.wait.until(EC.presence_of_all_elements_located(
+                            (By.XPATH, rules["daily_options"])
+                        ))
+                        options = [x.get_attribute("name") for x in option_elements]
+                    elif "多选题" == category:
+                        content = self.wait.until(EC.presence_of_element_located(
+                            (By.XPATH, rules["daily_content"])
+                        )).get_attribute("name")
+                        option_elements = self.wait.until(EC.presence_of_all_elements_located(
+                            (By.XPATH, rules["daily_options"])
+                        ))
+                        options = [x.get_attribute("name") for x in option_elements]
                     else:
-                        answer = bank["answer"]
-                        logger.debug(f'提交答案 {answer}')
-                        for k, option in zip(list("ABCDEFG"), option_elements):
-                            if k in answer:
-                                option.click()
+                        logger.error(f"未知的题目类型: {category}")
+                        raise('未知的题目类型')
+                    bank = self.query.get({
+                        "category": category,
+                        "content": content,
+                        "options": options
+                    })
+                    if bank and bank["answer"]:
+                        if "填空题" == category:
+                            answer = bank["answer"].split(" ")
+                            logger.debug(f'提交答案 {answer}')
+                            for k,v in zip(blank_edits, answer):
+                                k.send_keys(v)
                                 time.sleep(1)
-                    # time.sleep(3)
-                    # self.safe_click(rules["weekly_submit"])
-                    self._submit()
-                    continue
-                else:
-                    logger.error(f'每周答题 {4 - i}# 未查询到答案，放弃作答')
-                    self.safe_back('weekly question -> weekly list')
-                    self.safe_click(rules['weekly_back_confirm'])
-                    break
-            else: # else for 
-                logger.debug(f'循环结束，应该能拿+5分')
-                self.safe_back('weekly report -> weekly list')
+                            
+                        elif "单选题" == category:
+                            answer = bank["answer"]
+                            choose_index = ord(answer) - 65
+                            logger.info(f"提交答案 {answer}")
+                            option_elements[choose_index].click()
+                            
+                        else:
+                            answer = bank["answer"]
+                            logger.debug(f'提交答案 {answer}')
+                            for k, option in zip(list("ABCDEFG"), option_elements):
+                                if k in answer:
+                                    option.click()
+                                    time.sleep(1)
+                        # time.sleep(3)
+                        # self.safe_click(rules["weekly_submit"])
+                        self._submit()
+                        continue
+                    else:
+                        logger.error(f'每周答题 {4 - i}# 未查询到答案，放弃作答')
+                        self.safe_back('weekly question -> weekly list')
+                        self.safe_click(rules['weekly_back_confirm'])
+                        break
+                else: # else for 
+                    logger.debug(f'循环结束，应该能拿+5分')
+                    self.safe_back('weekly report -> weekly list')
+
         else: # else if "未作答" == weekly_current.get_attribute("name")
-            logger.info(f'本周的每周答题已完成')
+            logger.info(f'每周答题未找到可作答试卷')
         self.safe_back('weekly list -> quiz')
 
-        
+
+    # 不想将问题复杂化，假设所有人都是惜分之人，那么时间越远的试卷不需要理会，
+    # 方案一：只需要查询时间最近的试卷，最好的情况是每次都完成最新的一张试卷，最坏的情况也只进行少量循环
+    # 方案二：尽量查询时间最远的试卷，可以避免每月答题出现已过期的惨痛结果，但是逻辑更复杂
+    # 为了挑战，那就直接实现方案二吧！
+    # 经过一系列尝试,方案二存在许多无法规避的问题,而且一直检索也不是有效方法
+    # 慎重考虑,将方案二简化一步,仅在第一屏进行反向检索
+    # 方案一和方案二中取了一个折中,大大降低实现难度
+    # ps. 反向检索时不能从最后一个元素开始,因为最后一个元素往往在屏幕外方,无法点击
+    #       应对策略 -> 判断元素 y坐标 和 屏幕高度 差值, 差值小于 阈值的认为在屏幕外, 则舍弃
+
+    def weekly_travel(self):
+        # 反向，找到最后一个未作答
+        # 正向，找到第一个未作答
+        thresholds = 10 # 阈值 10px
+        try:
+            weeks = self.driver.find_elements_by_xpath(rules['weekly_block'])
+        except:
+            logger.error('No Such Element')
+            return
+
+        for item in weeks[::-1]: # 一屏一般6条记录,其他不在屏幕上,无法点击
+            child_count =len(item.find_elements(By.CLASS_NAME, "android.view.View"))
+            title_element, state_element = item.find_elements(By.CLASS_NAME, "android.view.View")[0], \
+                        item.find_elements(By.CLASS_NAME, "android.view.View")[1]
+            title, state = title_element.get_attribute("name"), state_element.get_attribute("name")
+            
+            # Usage:
+            #   location = element.location_in_view
+            #   x = location['x']
+            #   y = location['y']
+            axis_y = title_element.location_in_view['y']
+            logger.debug(f'{child_count} {title}, {state} {axis_y}')
+            if "未作答" == state and thresholds < (self.size['height'] - axis_y):
+                logger.debug(f'{title} {state} 就它了')
+                return title_element
+            else:
+                continue
+        else:
+            return None
+
 
 
     def weekly(self):
@@ -1048,13 +1098,14 @@ class App(Automation):
         if str(day_of_week) not in self.workdays:
             logger.debug(f'今日不宜每周答题 {day_of_week} / {self.workdays}')
             return
-        # if self.back_or_not("每周答题"):
-        #     return
-
+        if self.back_or_not("每周答题"):
+            return
+        avarice = cfg.getboolean('prefers', 'is_avarice')
         self.safe_click(rules['mine_entry'])
         self.safe_click(rules['quiz_entry'])
+
         time.sleep(3)
-        self._weekly()
+        self._weekly(avarice)
         self.safe_back('quiz -> mine')
         self.safe_back('mine -> home')
         
