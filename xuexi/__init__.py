@@ -506,22 +506,23 @@ class App(Automation):
         # contents = self.find_elements(rules["daily_blank_content"])
         # content = " ".join([x.get_attribute("name") for x in contents])
         # 下面一块代码可用列表生成式
-        content, spaces = "", []
+        content, spaces, _spaces = "", [], 0
         for item in contents:
             content_text = item.get_attribute("name")
             if "" != content_text:
                 content += content_text
+                if _spaces:
+                    spaces.append(_spaces)
+                    _spaces = 0
             else:
-                length_of_spaces = len(item.find_elements(By.CLASS_NAME, "android.view.View"))-1
-                print(f'空格数 {length_of_spaces}')
-                spaces.append(length_of_spaces)
-                content += " " * (length_of_spaces)
-        # 请见识列表生成式的强大吧
-        # content = "".join([x.get_attribute("name") 
-        #                     if x.get_attribute("name") 
-        #                     else " "*(len(x.find_elements(By.CLASS_NAME, "android.view.View"))-1)
-        #                     for x in contents ])
-        
+                content += " "
+                _spaces += 1
+        else: # for...else...
+            # 如果填空处在最后，需要加一个判断
+            if _spaces:
+                spaces.append(_spaces)
+            logger.debug(f'[填空题] {content} [{" ".join([str(x) for  x in spaces])}]')
+
         blank_edits = self.wait.until(EC.presence_of_all_elements_located((By.XPATH, rules["daily_blank_edits"])))
         # blank_edits = self.find_elements(rules["daily_blank_edits"])
         length_of_edits = len(blank_edits)
